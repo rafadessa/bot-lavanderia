@@ -109,9 +109,6 @@ app.post('/api/login', (req, res) => {
   res.status(401).json({ erro: 'Senha incorreta' });
 });
 
-// ==========================================
-// INTELIGÊNCIA MULTIMODAL (TEXTO, ÁUDIO E FOTO)
-// ==========================================
 const ferramentasGemini = [
   {
     functionDeclarations: [
@@ -131,7 +128,7 @@ const ferramentasGemini = [
       },
       {
         name: 'chamar_atendente_humano',
-        description: 'Pausa o bot e chama um atendente humano em caso de reclamação, peça manchada, problema em máquina ou foto de dúvida complexa.',
+        description: 'Pausa o bot e chama um atendente humano em caso de reclamação, peça manchada, problema em máquina ou dúvida complexa.',
         parameters: {
           type: 'OBJECT',
           properties: {
@@ -179,7 +176,6 @@ REGRAS:
 3. Cliente no WhatsApp: ${nomeWhatsapp || 'Cliente'}.
 `;
 
-  // Monta o histórico para o Gemini
   const contents = [];
   for (const r of msgRows) {
     const role = r.role === 'model' ? 'model' : 'user';
@@ -191,16 +187,15 @@ REGRAS:
     }
   }
 
-  // Prepara a mensagem atual (Texto, Áudio ou Imagem)
   const userParts = [];
-  if (tipoMidia === 'image' || tipoMidia === 'audio') {
+  if ((tipoMidia === 'image' || tipoMidia === 'audio') && bufferMidia) {
     userParts.push({
       inlineData: {
-        mimeType: mimeType,
+        mimeType: mimeType || (tipoMidia === 'audio' ? 'audio/ogg' : 'image/jpeg'),
         data: bufferMidia.toString('base64')
       }
     });
-    userParts.push({ text: inputUsuario || 'Analise esta mídia e responda ao cliente de acordo com as regras da lavanderia.' });
+    userParts.push({ text: inputUsuario || 'Por favor, analise esta mídia recebida do cliente e responda conforme as regras da lavanderia.' });
   } else {
     userParts.push({ text: inputUsuario });
   }
@@ -251,9 +246,6 @@ REGRAS:
   );
 }
 
-// ==========================================
-// WEBHOOK ROBUSTO COM SUPORTE A MÍDIA
-// ==========================================
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
@@ -272,53 +264,50 @@ app.post('/webhook', async (req, res) => {
     let bufferMidia = null;
     let mimeType = null;
 
-    // Detecta Áudio
+    // Trata Áudio / PTT
     const audioMessage = data.message?.audioMessage || data.message?.pttMessage;
     if (audioMessage) {
       tipoMidia = 'audio';
       mimeType = audioMessage.mimetype || 'audio/ogg';
-      // Baixa o áudio da Evolution API
-      const base64Audio = data.messageBase64 || audioMessage.base64;
-      if (base64Audio) {
-        bufferMidia = Buffer.from(base64Audio, 'base64');
-      } else {
-        // Tenta buscar via API caso venha URL
-        try {
-          const resMidia = await axios.post(`${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`, { message: data }, { headers: headersEvo });
-          if (resMidia.data?.base64) {
-            bufferMidia = Buffer.from(resMidia.data.base64.split(',')[1] || resMidia.data.base64, 'base64');
-          }
-        } catch (e) {
-          console.log('Erro ao baixar áudio:', e.message);
+      textoMensagem = '[Áudio do cliente]';
+      try {
+        const resMidia = await axios.post(
+          `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
+          { message: data },
+          { headers: headersEvo }
+        );
+        if (resMidia.data?.base64) {
+          const b64 = resMidia.data.base64;
+          bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
         }
+      } catch (e) {
+        console.log('Erro ao descarregar áudio:', e.message);
       }
-      textoMensagem = '[O cliente enviou um áudio]';
     }
 
-    // Detecta Imagem
+    // Trata Imagem
     const imageMessage = data.message?.imageMessage;
     if (imageMessage) {
       tipoMidia = 'image';
       mimeType = imageMessage.mimetype || 'image/jpeg';
-      textoMensagem = imageMessage.caption || '[O cliente enviou uma imagem]';
-      const base64Image = data.messageBase64 || imageMessage.base64;
-      if (base64Image) {
-        bufferMidia = Buffer.from(base64Image, 'base64');
-      } else {
-        try {
-          const resMidia = await axios.post(`${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`, { message: data }, { headers: headersEvo });
-          if (resMidia.data?.base64) {
-            bufferMidia = Buffer.from(resMidia.data.base64.split(',')[1] || resMidia.data.base64, 'base64');
-          }
-        } catch (e) {
-          console.log('Erro ao baixar imagem:', e.message);
+      textoMensagem = imageMessage.caption || '[Imagem do cliente]';
+      try {
+        const resMidia = await axios.post(
+          `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
+          { message: data },
+          { headers: headersEvo }
+        );
+        if (resMidia.data?.base64) {
+          const b64 = resMidia.data.base64;
+          bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
         }
+      } catch (e) {
+        console.log('Erro ao descarregar imagem:', e.message);
       }
     }
 
     if (!textoMensagem && !bufferMidia) return;
 
-    // Salva lead e mensagem
     await pool.query(
       `INSERT INTO leads (telefone, nome, ultima_mensagem, atualizado_em)
        VALUES ($1, $2, $3, NOW())
@@ -334,7 +323,6 @@ app.post('/webhook', async (req, res) => {
 
     if (!cfgRows[0]?.bot_ativo_global || leadRows[0]?.bot_pausado) return;
 
-    // Processa com a IA Multimodal
     const respostaIA = await processarComIA(telefone, pushName, textoMensagem, tipoMidia, bufferMidia, mimeType);
 
     await pool.query(`INSERT INTO mensagens (telefone, role, texto) VALUES ($1, 'model', $2)`, [telefone, respostaIA]);
