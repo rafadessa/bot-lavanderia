@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Painel da Lavanderia</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 pb-20">
+
+  <!-- TELA DE LOGIN -->
+  <div id="tela-login" class="min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white p-6 rounded-2xl shadow-md w-full max-w-sm">
+      <h1 class="text-2xl font-bold text-center text-blue-600 mb-2">Painel Lavanderia</h1>
+      <p class="text-sm text-slate-500 text-center mb-6">Digite sua senha de acesso</p>
+      <input id="input-senha" type="password" placeholder="Senha do painel"
+        class="w-full border rounded-xl p-3 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      <button onclick="fazerLogin()"
+        class="w-full bg-blue-600 text-white font-semibold py-3 rounded-xl hover:bg-blue-700">
+        Entrar
+      </button>
+      <p id="erro-login" class="text-red-500 text-sm text-center mt-3 hidden">Senha incorreta.</p>
+    </div>
+  </div>
+
+  <!-- APP PRINCIPAL -->
+  <div id="app" class="hidden max-w-2xl mx-auto">
+    <!-- TOPO -->
+    <header class="bg-white shadow-sm sticky top-0 z-10 px-4 py-3 flex items-center justify-between">
+      <div>
+        <h1 id="titulo-lavanderia" class="font-bold text-lg text-slate-800">Lavanderia</h1>
+        <span id="badge-whats" class="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">Verificando WhatsApp...</span>
+      </div>
+      <button onclick="sair()" class="text-xs text-slate-500 underline">Sair</button>
+    </header>
+
+    <!-- ABA 1: COLETAS / AGENDAMENTOS -->
+    <main class="p-4">
+      <section id="aba-coletas" class="aba">
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="font-bold text-lg">Coletas Agendadas</h2>
+          <button onclick="carregarAgendamentos()" class="text-sm text-blue-600 font-medium">Atualizar</button>
+        </div>
+        <div id="lista-agendamentos" class="space-y-3"></div>
+      </section>
+
+      <!-- ABA 2: LEADS -->
+      <section id="aba-leads" class="aba hidden">
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="font-bold text-lg">Clientes & Leads</h2>
+          <button onclick="carregarLeads()" class="text-sm text-blue-600 font-medium">Atualizar</button>
+        </div>
+        <div id="lista-leads" class="space-y-3"></div>
+      </section>
+
+      <!-- ABA 3: WHATSAPP -->
+      <section id="aba-whatsapp" class="aba hidden">
+        <h2 class="font-bold text-lg mb-3">Conexão do WhatsApp</h2>
+        <div class="bg-white p-5 rounded-2xl shadow-sm text-center">
+          <p id="status-whats-texto" class="font-semibold text-base mb-4">Verificando...</p>
+
+          <div id="area-conectar" class="hidden space-y-4">
+            <button onclick="gerarConexao(false)"
+              class="w-full bg-green-600 text-white py-3 rounded-xl font-semibold">
+              Gerar QR Code
+            </button>
+
+            <div class="border-t pt-4">
+              <p class="text-xs text-slate-500 mb-2">Está no celular? Conecte com código de 8 dígitos:</p>
+              <div class="flex gap-2">
+                <input id="input-numero-whats" type="tel" placeholder="5551999999999"
+                  class="flex-1 border rounded-xl px-3 py-2 text-sm" />
+                <button onclick="gerarConexao(true)"
+                  class="bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-semibold">
+                  Gerar Código
+                </button>
+              </div>
+            </div>
+
+            <div id="resultado-conexao" class="pt-2 flex flex-col items-center"></div>
+          </div>
+
+          <div id="area-desconectar" class="hidden">
+            <p class="text-sm text-slate-500 mb-4">Seu WhatsApp está conectado e o robô está pronto para responder.</p>
+            <button onclick="desconectarWhats()"
+              class="bg-red-500 text-white px-5 py-2.5 rounded-xl text-sm font-semibold">
+              Desconectar WhatsApp
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ABA 4: CONFIGURAÇÕES -->
+      <section id="aba-config" class="aba hidden">
+        <h2 class="font-bold text-lg mb-3">Configurações da IA</h2>
+        <div class="bg-white p-4 rounded-2xl shadow-sm space-y-4">
+          <label class="flex items-center justify-between bg-slate-50 p-3 rounded-xl">
+            <span class="font-semibold text-sm">Robô de Atendimento Ativo</span>
+            <input id="cfg-ativo" type="checkbox" class="w-5 h-5 accent-blue-600" />
+          </label>
+
+          <div>
+            <label class="text-xs font-semibold text-slate-500">Nome da Lavanderia</label>
+            <input id="cfg-nome" class="w-full border rounded-xl p-2.5 mt-1 text-sm" />
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-slate-500">Endereço</label>
+            <input id="cfg-endereco" class="w-full border rounded-xl p-2.5 mt-1 text-sm" />
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-slate-500">Horário de Funcionamento</label>
+            <input id="cfg-horario" class="w-full border rounded-xl p-2.5 mt-1 text-sm" />
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-slate-500">Tabela de Preços (a IA lê exatamente isso)</label>
+            <textarea id="cfg-precos" rows="6" class="w-full border rounded-xl p-2.5 mt-1 text-sm"></textarea>
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-slate-500">Regras, Prazos e Taxa de Entrega</label>
+            <textarea id="cfg-regras" rows="3" class="w-full border rounded-xl p-2.5 mt-1 text-sm"></textarea>
+          </div>
+          <button onclick="salvarConfig()"
+            class="w-full bg-blue-600 text-white font-semibold py-3 rounded-xl">
+            Salvar Alterações
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <!-- MODAL HISTÓRICO DE CONVERSA -->
+    <div id="modal-chat" class="fixed inset-0 bg-black/50 hidden items-center justify-center p-4 z-50">
+      <div class="bg-white rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col">
+        <div class="p-4 border-b flex justify-between items-center">
+          <h3 id="modal-chat-titulo" class="font-bold">Conversa</h3>
+          <button onclick="fecharChat()" class="text-slate-500 font-bold">✕</button>
+        </div>
+        <div id="modal-chat-corpo" class="p-4 overflow-y-auto space-y-2 flex-1 bg-slate-50 text-sm"></div>
+      </div>
+    </div>
+
+    <!-- MENU INFERIOR (MOBILE) -->
+    <nav class="fixed bottom-0 left-0 right-0 bg-white border-t flex justify-around py-2 text-xs font-medium">
+      <button onclick="abrirAba('coletas')" class="nav-btn text-blue-600 flex flex-col items-center">📦<span>Coletas</span></button>
+      <button onclick="abrirAba('leads')" class="nav-btn text-slate-500 flex flex-col items-center">👥<span>Leads</span></button>
+      <button onclick="abrirAba('whatsapp')" class="nav-btn text-slate-500 flex flex-col items-center">📱<span>WhatsApp</span></button>
+      <button onclick="abrirAba('config')" class="nav-btn text-slate-500 flex flex-col items-center">⚙️<span>IA / Preços</span></button>
+    </nav>
+  </div>
+
+  <script>
+    let senhaAdmin = localStorage.getItem('lavanderia_senha') || '';
+    let intervaloStatus = null;
+
+    async function api(url, options = {}) {
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-password': senhaAdmin,
+          ...(options.headers || {})
+        }
+      });
+      if (res.status === 401) {
+        sair();
+        throw new Error('Não autorizado');
+      }
+      return res.json();
+    }
+
+    async function fazerLogin() {
+      const senha = document.getElementById('input-senha').value;
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ senha })
+      });
+      if (res.ok) {
+        senhaAdmin = senha;
+        localStorage.setItem('lavanderia_senha', senha);
+        iniciarApp();
+      } else {
+        document.getElementById('erro-login').classList.remove('hidden');
+      }
+    }
+
+    function sair() {
+      localStorage.removeItem('lavanderia_senha');
+      location.reload();
+    }
+
+    function iniciarApp() {
+      document.getElementById('tela-login').classList.add('hidden');
+      document.getElementById('app').classList.remove('hidden');
+      carregarConfig();
+      carregarAgendamentos();
+      verificarWhats();
+    }
+
+    function abrirAba(nome) {
+      document.querySelectorAll('.aba').forEach(el => el.classList.add('hidden'));
+      document.getElementById('aba-' + nome).classList.remove('hidden');
+      if (nome === 'coletas') carregarAgendamentos();
+      if (nome === 'leads') carregarLeads();
+      if (nome === 'whatsapp') verificarWhats();
+      if (nome === 'config') carregarConfig();
+    }
+
+    async function carregarAgendamentos() {
+      const dados = await api('/api/agendamentos');
+      const container = document.getElementById('lista-agendamentos');
+      if (!dados.length) {
+        container.innerHTML = '<p class="text-center text-slate-400 py-8 text-sm">Nenhuma coleta agendada ainda.</p>';
+        return;
+      }
+      container.innerHTML = dados.map(a => `
+        <div class="bg-white p-4 rounded-2xl shadow-sm space-y-2">
+          <div class="flex justify-between items-start">
+            <div>
+              <p class="font-bold text-slate-800">${a.nome}</p>
+              <p class="text-xs text-slate-500">Turno: ${a.turno}</p>
+            </div>
+            <select onchange="mudarStatus(${a.id}, this.value)"
+              class="text-xs font-semibold rounded-lg border px-2 py-1 bg-slate-50">
+              ${['Pendente', 'Coletado', 'Lavando', 'Entregue', 'Cancelado']
+                .map(s => `<option value="${s}" ${a.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+            </select>
+          </div>
+          <p class="text-sm"><strong>Peças:</strong> ${a.pecas}</p>
+          <p class="text-sm text-slate-600"><strong>Endereço:</strong> ${a.endereco}</p>
+          <div class="flex gap-2 pt-1">
+            <a href="https://wa.me/${a.telefone}" target="_blank"
+              class="flex-1 text-center bg-green-100 text-green-700 text-xs font-semibold py-2 rounded-xl">Chamar no Whats</a>
+            <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(a.endereco)}" target="_blank"
+              class="flex-1 text-center bg-blue-100 text-blue-700 text-xs font-semibold py-2 rounded-xl">Abrir no Mapa</a>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function mudarStatus(id, status) {
+      await api(`/api/agendamentos/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+    }
+
+    async function carregarLeads() {
+      const dados = await api('/api/leads');
+      const container = document.getElementById('lista-leads');
+      if (!dados.length) {
+        container.innerHTML = '<p class="text-center text-slate-400 py-8 text-sm">Nenhum cliente chamou ainda.</p>';
+        return;
+      }
+      container.innerHTML = dados.map(l => `
+        <div class="bg-white p-4 rounded-2xl shadow-sm space-y-2">
+          <div class="flex justify-between items-center">
+            <div>
+              <p class="font-bold">${l.nome || l.telefone}</p>
+              <p class="text-xs text-slate-400">${l.telefone}</p>
+            </div>
+            <button onclick="alternarBotLead(${l.id}, ${!l.bot_pausado})"
+              class="text-xs px-3 py-1.5 rounded-xl font-semibold ${l.bot_pausado ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-700'}">
+              ${l.bot_pausado ? '⏸ IA Pausada' : '🤖 IA Ativa'}
+            </button>
+          </div>
+          ${l.motivo_pausa ? `<p class="text-xs bg-red-50 text-red-600 p-2 rounded-lg">⚠️ ${l.motivo_pausa}</p>` : ''}
+          <p class="text-xs text-slate-500 truncate">Última msg: ${l.ultima_mensagem || '-'}</p>
+          <div class="flex gap-2 pt-1">
+            <button onclick="verChat('${l.telefone}', '${l.nome || l.telefone}')"
+              class="flex-1 bg-slate-100 text-slate-700 text-xs font-semibold py-2 rounded-xl">Ver Conversa</button>
+            <a href="https://wa.me/${l.telefone}" target="_blank"
+              class="flex-1 text-center bg-green-100 text-green-700 text-xs font-semibold py-2 rounded-xl">WhatsApp</a>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function alternarBotLead(id, pausar) {
+      await api(`/api/leads/${id}/toggle-bot`, { method: 'PATCH', body: JSON.stringify({ bot_pausado: pausar }) });
+      carregarLeads();
+    }
+
+    async function verChat(telefone, nome) {
+      const msgs = await api(`/api/leads/${telefone}/mensagens`);
+      document.getElementById('modal-chat-titulo').innerText = nome;
+      document.getElementById('modal-chat-corpo').innerHTML = msgs.map(m => `
+        <div class="flex ${m.role === 'model' ? 'justify-end' : 'justify-start'}">
+          <div class="max-w-[80%] px-3 py-2 rounded-xl ${m.role === 'model' ? 'bg-blue-600 text-white' : 'bg-white border'}">
+            ${m.texto.replace(/\n/g, '<br>')}
+          </div>
+        </div>
+      `).join('');
+      document.getElementById('modal-chat').classList.remove('hidden');
+      document.getElementById('modal-chat').classList.add('flex');
+    }
+
+    function fecharChat() {
+      document.getElementById('modal-chat').classList.add('hidden');
+      document.getElementById('modal-chat').classList.remove('flex');
+    }
+
+    async function verificarWhats() {
+      const data = await api('/api/whatsapp/status');
+      const badge = document.getElementById('badge-whats');
+      const texto = document.getElementById('status-whats-texto');
+      const areaConectar = document.getElementById('area-conectar');
+      const areaDesconectar = document.getElementById('area-desconectar');
+
+      if (data.conectado) {
+        badge.innerText = '● WhatsApp Conectado';
+        badge.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700';
+        texto.innerText = '✅ WhatsApp Conectado';
+        areaConectar.classList.add('hidden');
+        areaDesconectar.classList.remove('hidden');
+        document.getElementById('resultado-conexao').innerHTML = '';
+        if (intervaloStatus) clearInterval(intervaloStatus);
+      } else {
+        badge.innerText = '● Desconectado';
+        badge.className = 'text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700';
+        texto.innerText = '❌ WhatsApp Desconectado';
+        areaConectar.classList.remove('hidden');
+        areaDesconectar.classList.add('hidden');
+      }
+    }
+
+    async function gerarConexao(porCodigo) {
+      const resDiv = document.getElementById('resultado-conexao');
+      resDiv.innerHTML = '<p class="text-sm text-slate-500">Gerando...</p>';
+      const numero = porCodigo ? document.getElementById('input-numero-whats').value : '';
+      const url = porCodigo ? `/api/whatsapp/conectar?numero=${encodeURIComponent(numero)}` : '/api/whatsapp/conectar';
+      const data = await api(url);
+
+      if (porCodigo && data.pairingCode) {
+        resDiv.innerHTML = `
+          <p class="text-xs text-slate-500 mb-1">Digite este código no WhatsApp (Aparelhos Conectados):</p>
+          <p class="text-2xl font-mono font-bold tracking-widest bg-slate-100 px-4 py-2 rounded-xl">${data.pairingCode}</p>
+        `;
+      } else if (data.qrcode) {
+        resDiv.innerHTML = `<img src="${data.qrcode}" class="w-56 h-56 border rounded-xl" />`;
+      } else {
+        resDiv.innerHTML = `<p class="text-sm text-red-500">${data.erro || 'Não foi possível gerar. Tente novamente.'}</p>`;
+      }
+
+      if (intervaloStatus) clearInterval(intervaloStatus);
+      intervaloStatus = setInterval(verificarWhats, 5000);
+    }
+
+    async function desconectarWhats() {
+      if (!confirm('Deseja desconectar o WhatsApp da lavanderia?')) return;
+      await api('/api/whatsapp/desconectar', { method: 'POST' });
+      verificarWhats();
+    }
+
+    async function carregarConfig() {
+      const c = await api('/api/config');
+      document.getElementById('titulo-lavanderia').innerText = c.nome_lavanderia;
+      document.getElementById('cfg-ativo').checked = c.bot_ativo_global;
+      document.getElementById('cfg-nome').value = c.nome_lavanderia;
+      document.getElementById('cfg-endereco').value = c.endereco;
+      document.getElementById('cfg-horario').value = c.horario;
+      document.getElementById('cfg-precos').value = c.tabela_precos;
+      document.getElementById('cfg-regras').value = c.regras_extras;
+    }
+
+    async function salvarConfig() {
+      await api('/api/config', {
+        method: 'PUT',
+        body: JSON.stringify({
+          bot_ativo_global: document.getElementById('cfg-ativo').checked,
+          nome_lavanderia: document.getElementById('cfg-nome').value,
+          endereco: document.getElementById('cfg-endereco').value,
+          horario: document.getElementById('cfg-horario').value,
+          tabela_precos: document.getElementById('cfg-precos').value,
+          regras_extras: document.getElementById('cfg-regras').value
+        })
+      });
+      alert('Configurações salvas! A IA já está usando os novos dados.');
+      carregarConfig();
+    }
+
+    if (senhaAdmin) iniciarApp();
+  </script>
+</body>
+</html>
