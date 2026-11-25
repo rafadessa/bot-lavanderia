@@ -284,10 +284,21 @@ app.post('/webhook', async (req, res) => {
     if (audioMessage) {
       tipoMidia = 'audio';
       mimeType = audioMessage.mimetype || 'audio/ogg; codecs=opus';
-      textoMensagem = '[Áudio do cliente]';
+      textoMensagem = '[O cliente enviou um áudio]';
 
+      // Tenta várias formas de extrair o base64 da mídia que a Evolution envia
       let b64 = data.messageBase64 || audioMessage.base64;
-      if (!b64) {
+      
+      if (!b64 && audioMessage.url) {
+        try {
+          const resDownload = await axios.get(audioMessage.url, { responseType: 'arraybuffer' });
+          bufferMidia = Buffer.from(resDownload.data);
+        } catch (err) {
+          console.log('Erro ao baixar URL direta do áudio:', err.message);
+        }
+      }
+
+      if (!b64 && !bufferMidia) {
         try {
           const resMidia = await axios.post(
             `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
@@ -296,11 +307,11 @@ app.post('/webhook', async (req, res) => {
           );
           b64 = resMidia.data?.base64;
         } catch (e) {
-          // Fallback silencioso para texto se o endpoint de mídia falhar
+          console.log('Aviso ao buscar áudio via Evolution endpoint:', e.message);
         }
       }
 
-      if (b64) {
+      if (b64 && !bufferMidia) {
         bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
       }
     }
@@ -309,10 +320,17 @@ app.post('/webhook', async (req, res) => {
     if (imageMessage) {
       tipoMidia = 'image';
       mimeType = imageMessage.mimetype || 'image/jpeg';
-      textoMensagem = imageMessage.caption || '[Imagem do cliente]';
+      textoMensagem = imageMessage.caption || '[O cliente enviou uma imagem]';
 
       let b64 = data.messageBase64 || imageMessage.base64;
-      if (!b64) {
+      if (!b64 && imageMessage.url) {
+        try {
+          const resDownload = await axios.get(imageMessage.url, { responseType: 'arraybuffer' });
+          bufferMidia = Buffer.from(resDownload.data);
+        } catch (err) {}
+      }
+
+      if (!b64 && !bufferMidia) {
         try {
           const resMidia = await axios.post(
             `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
@@ -323,9 +341,15 @@ app.post('/webhook', async (req, res) => {
         } catch (e) {}
       }
 
-      if (b64) {
+      if (b64 && !bufferMidia) {
         bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
       }
+    }
+
+    // Se mesmo assim o áudio vier sem buffer (por restrição da Evolution), tratamos o áudio como uma pergunta amigável para a IA responder baseada no contexto ou pedir detalhes, em vez de rejeitar
+    if (tipoMidia === 'audio' && (!bufferMidia || bufferMidia.length === 0)) {
+      textoMensagem = 'O cliente enviou um áudio. Responda amigavelmente perguntando se ele pode detalhar por escrito ou confirme se deseja informações sobre a lavanderia.';
+      tipoMidia = 'text';
     }
 
     if (!textoMensagem && !bufferMidia) return;
