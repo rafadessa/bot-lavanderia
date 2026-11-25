@@ -157,7 +157,7 @@ async function chamarGeminiComRetry(url, payload, tentativas = 3) {
   }
 }
 
-async function processarComIA(telefone, nomeWhatsapp, inputUsuario, tipoMidia = 'text', bufferMidia = null, mimeType = null) {
+async function processarComIA(telefone, nomeWhatsapp, inputUsuario) {
   const { rows: cfgRows } = await pool.query('SELECT * FROM configuracoes WHERE id = 1');
   const cfg = cfgRows[0];
 
@@ -188,7 +188,7 @@ ${textoFaq}
 
 REGRAS:
 1. Responda com base na tabela e FAQ. Se mandarem foto de roupa manchada ou com problema, peça desculpas e acione "chamar_atendente_humano".
-2. Se o cliente enviar áudio ou texto querendo saber sobre os serviços, preços ou agendar o Serviço da Equipe (+R$ 7), responda com base nas informações da loja.
+2. Se o cliente enviar um áudio, seja muito educada e diga que no momento prefere mensagens escritas para poder ajudar com mais rapidez e precisão nos preços e serviços.
 3. Cliente no WhatsApp: ${nomeWhatsapp || 'Cliente'}.
 `;
 
@@ -203,22 +203,10 @@ REGRAS:
     }
   }
 
-  const userParts = [];
-  if ((tipoMidia === 'image' || tipoMidia === 'audio') && bufferMidia) {
-    userParts.push({
-      inlineData: {
-        mimeType: mimeType || (tipoMidia === 'audio' ? 'audio/ogg' : 'image/jpeg'),
-        data: bufferMidia.toString('base64')
-      }
-    });
-    userParts.push({ text: inputUsuario || 'Ouviste este áudio/viste esta imagem? Responde ao cliente com simpatia com base nas informações da lavanderia.' });
-  } else {
-    userParts.push({ text: inputUsuario });
-  }
+  contents.push({ role: 'user', parts: [{ text: inputUsuario }] });
 
-  contents.push({ role: 'user', parts: userParts });
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  // ATUALIZADO PARA O MODELO GEMINI 3.5 FLASH
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
   let resposta = await chamarGeminiComRetry(url, {
     system_instruction: { parts: [{ text: systemPrompt }] },
@@ -276,83 +264,18 @@ app.post('/webhook', async (req, res) => {
     const pushName = data.pushName || 'Cliente';
 
     let textoMensagem = data.message?.conversation || data.message?.extendedTextMessage?.text || '';
-    let tipoMidia = 'text';
-    let bufferMidia = null;
-    let mimeType = null;
 
     const audioMessage = data.message?.audioMessage || data.message?.pttMessage;
     if (audioMessage) {
-      tipoMidia = 'audio';
-      mimeType = audioMessage.mimetype || 'audio/ogg; codecs=opus';
-      textoMensagem = '[O cliente enviou um áudio]';
-
-      // Tenta várias formas de extrair o base64 da mídia que a Evolution envia
-      let b64 = data.messageBase64 || audioMessage.base64;
-      
-      if (!b64 && audioMessage.url) {
-        try {
-          const resDownload = await axios.get(audioMessage.url, { responseType: 'arraybuffer' });
-          bufferMidia = Buffer.from(resDownload.data);
-        } catch (err) {
-          console.log('Erro ao baixar URL direta do áudio:', err.message);
-        }
-      }
-
-      if (!b64 && !bufferMidia) {
-        try {
-          const resMidia = await axios.post(
-            `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
-            { message: data },
-            { headers: headersEvo }
-          );
-          b64 = resMidia.data?.base64;
-        } catch (e) {
-          console.log('Aviso ao buscar áudio via Evolution endpoint:', e.message);
-        }
-      }
-
-      if (b64 && !bufferMidia) {
-        bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
-      }
+      textoMensagem = '[O cliente enviou uma mensagem de áudio]';
     }
 
     const imageMessage = data.message?.imageMessage;
     if (imageMessage) {
-      tipoMidia = 'image';
-      mimeType = imageMessage.mimetype || 'image/jpeg';
-      textoMensagem = imageMessage.caption || '[O cliente enviou uma imagem]';
-
-      let b64 = data.messageBase64 || imageMessage.base64;
-      if (!b64 && imageMessage.url) {
-        try {
-          const resDownload = await axios.get(imageMessage.url, { responseType: 'arraybuffer' });
-          bufferMidia = Buffer.from(resDownload.data);
-        } catch (err) {}
-      }
-
-      if (!b64 && !bufferMidia) {
-        try {
-          const resMidia = await axios.post(
-            `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
-            { message: data },
-            { headers: headersEvo }
-          );
-          b64 = resMidia.data?.base64;
-        } catch (e) {}
-      }
-
-      if (b64 && !bufferMidia) {
-        bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
-      }
+      textoMensagem = imageMessage.caption || '[O cliente enviou uma imagem/foto]';
     }
 
-    // Se mesmo assim o áudio vier sem buffer (por restrição da Evolution), tratamos o áudio como uma pergunta amigável para a IA responder baseada no contexto ou pedir detalhes, em vez de rejeitar
-    if (tipoMidia === 'audio' && (!bufferMidia || bufferMidia.length === 0)) {
-      textoMensagem = 'O cliente enviou um áudio. Responda amigavelmente perguntando se ele pode detalhar por escrito ou confirme se deseja informações sobre a lavanderia.';
-      tipoMidia = 'text';
-    }
-
-    if (!textoMensagem && !bufferMidia) return;
+    if (!textoMensagem) return;
 
     await pool.query(
       `INSERT INTO leads (telefone, nome, ultima_mensagem, atualizado_em)
@@ -369,7 +292,7 @@ app.post('/webhook', async (req, res) => {
 
     if (!cfgRows[0]?.bot_ativo_global || leadRows[0]?.bot_pausado) return;
 
-    const respostaIA = await processarComIA(telefone, pushName, textoMensagem, tipoMidia, bufferMidia, mimeType);
+    const respostaIA = await processarComIA(telefone, pushName, textoMensagem);
 
     await pool.query(`INSERT INTO mensagens (telefone, role, texto) VALUES ($1, 'model', $2)`, [telefone, respostaIA]);
 
