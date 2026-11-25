@@ -157,7 +157,7 @@ async function chamarGeminiComRetry(url, payload, tentativas = 3) {
   }
 }
 
-async function processarComIA(telefone, nomeWhatsapp, inputUsuario) {
+async function processarComIA(telefone, nomeWhatsapp, inputUsuario, tipoMidia = 'text', bufferMidia = null, mimeType = null) {
   const { rows: cfgRows } = await pool.query('SELECT * FROM configuracoes WHERE id = 1');
   const cfg = cfgRows[0];
 
@@ -188,7 +188,7 @@ ${textoFaq}
 
 REGRAS:
 1. Responda com base na tabela e FAQ. Se mandarem foto de roupa manchada ou com problema, peça desculpas e acione "chamar_atendente_humano".
-2. Se o cliente enviar um áudio, seja muito educada e diga que no momento prefere mensagens escritas para poder ajudar com mais rapidez e precisão nos preços e serviços.
+2. Ouça atentamente o áudio ou leia a mensagem do cliente e responda de forma prestativa sobre os serviços, preços ou horários da lavanderia.
 3. Cliente no WhatsApp: ${nomeWhatsapp || 'Cliente'}.
 `;
 
@@ -203,9 +203,22 @@ REGRAS:
     }
   }
 
-  contents.push({ role: 'user', parts: [{ text: inputUsuario }] });
+  const userParts = [];
+  if ((tipoMidia === 'image' || tipoMidia === 'audio') && bufferMidia) {
+    userParts.push({
+      inlineData: {
+        mimeType: mimeType || (tipoMidia === 'audio' ? 'audio/ogg' : 'image/jpeg'),
+        data: bufferMidia.toString('base64')
+      }
+    });
+    userParts.push({ text: inputUsuario || 'Ouça este áudio enviado pelo cliente e responda com simpatia com base nas informações da lavanderia.' });
+  } else {
+    userParts.push({ text: inputUsuario });
+  }
 
-  // ATUALIZADO PARA O MODELO GEMINI 3.5 FLASH
+  contents.push({ role: 'user', parts: userParts });
+
+  // Endpoint do Gemini 3.5 Flash
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
   let resposta = await chamarGeminiComRetry(url, {
@@ -264,18 +277,54 @@ app.post('/webhook', async (req, res) => {
     const pushName = data.pushName || 'Cliente';
 
     let textoMensagem = data.message?.conversation || data.message?.extendedTextMessage?.text || '';
+    let tipoMidia = 'text';
+    let bufferMidia = null;
+    let mimeType = null;
 
     const audioMessage = data.message?.audioMessage || data.message?.pttMessage;
     if (audioMessage) {
-      textoMensagem = '[O cliente enviou uma mensagem de áudio]';
+      tipoMidia = 'audio';
+      mimeType = audioMessage.mimetype || 'audio/ogg; codecs=opus';
+      textoMensagem = '[Áudio do cliente]';
+
+      // Tenta descarregar o áudio binário diretamente através da Evolution API
+      try {
+        const resMidia = await axios.post(
+          `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
+          { message: data },
+          { headers: headersEvo }
+        );
+        const b64 = resMidia.data?.base64;
+        if (b64) {
+          bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
+        }
+      } catch (e) {
+        console.log('Aviso ao descarregar áudio da Evolution:', e.message);
+      }
     }
 
     const imageMessage = data.message?.imageMessage;
     if (imageMessage) {
-      textoMensagem = imageMessage.caption || '[O cliente enviou uma imagem/foto]';
+      tipoMidia = 'image';
+      mimeType = imageMessage.mimetype || 'image/jpeg';
+      textoMensagem = imageMessage.caption || '[Imagem do cliente]';
+
+      try {
+        const resMidia = await axios.post(
+          `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
+          { message: data },
+          { headers: headersEvo }
+        );
+        const b64 = resMidia.data?.base64;
+        if (b64) {
+          bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
+        }
+      } catch (e) {
+        console.log('Aviso ao descarregar imagem da Evolution:', e.message);
+      }
     }
 
-    if (!textoMensagem) return;
+    if (!textoMensagem && !bufferMidia) return;
 
     await pool.query(
       `INSERT INTO leads (telefone, nome, ultima_mensagem, atualizado_em)
@@ -292,7 +341,7 @@ app.post('/webhook', async (req, res) => {
 
     if (!cfgRows[0]?.bot_ativo_global || leadRows[0]?.bot_pausado) return;
 
-    const respostaIA = await processarComIA(telefone, pushName, textoMensagem);
+    const respostaIA = await processarComIA(telefone, pushName, textoMensagem, tipoMidia, bufferMidia, mimeType);
 
     await pool.query(`INSERT INTO mensagens (telefone, role, texto) VALUES ($1, 'model', $2)`, [telefone, respostaIA]);
 
