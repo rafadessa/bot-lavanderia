@@ -172,7 +172,7 @@ ${textoFaq}
 
 REGRAS:
 1. Responda com base na tabela e FAQ. Se mandarem foto de roupa manchada ou com problema, peça desculpas e acione "chamar_atendente_humano".
-2. Se mandarem áudio ou texto querendo agendar o Serviço da Equipe (+R$ 7) ou deixar roupas, colete Nome, Peças e Turno e chame "registrar_pedido".
+2. Se o cliente enviar áudio ou texto querendo saber sobre os serviços, preços ou agendar o Serviço da Equipe (+R$ 7), responda com base nas informações da loja.
 3. Cliente no WhatsApp: ${nomeWhatsapp || 'Cliente'}.
 `;
 
@@ -195,7 +195,7 @@ REGRAS:
         data: bufferMidia.toString('base64')
       }
     });
-    userParts.push({ text: inputUsuario || 'Por favor, analise esta mídia recebida do cliente e responda conforme as regras da lavanderia.' });
+    userParts.push({ text: inputUsuario || 'Ouviste este áudio/viste esta imagem? Responde ao cliente com simpatia com base nas informações da lavanderia.' });
   } else {
     userParts.push({ text: inputUsuario });
   }
@@ -270,18 +270,26 @@ app.post('/webhook', async (req, res) => {
       tipoMidia = 'audio';
       mimeType = audioMessage.mimetype || 'audio/ogg';
       textoMensagem = '[Áudio do cliente]';
-      try {
-        const resMidia = await axios.post(
-          `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
-          { message: data },
-          { headers: headersEvo }
-        );
-        if (resMidia.data?.base64) {
-          const b64 = resMidia.data.base64;
-          bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
+      
+      // 1. Tenta pegar o base64 direto do payload
+      let b64 = data.messageBase64 || audioMessage.base64;
+
+      // 2. Se não vier no payload, pede à Evolution API via endpoint de mídia
+      if (!b64) {
+        try {
+          const resMidia = await axios.post(
+            `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
+            { message: data },
+            { headers: headersEvo }
+          );
+          b64 = resMidia.data?.base64;
+        } catch (e) {
+          console.log('Erro ao buscar áudio via API:', e.message);
         }
-      } catch (e) {
-        console.log('Erro ao descarregar áudio:', e.message);
+      }
+
+      if (b64) {
+        bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
       }
     }
 
@@ -291,18 +299,23 @@ app.post('/webhook', async (req, res) => {
       tipoMidia = 'image';
       mimeType = imageMessage.mimetype || 'image/jpeg';
       textoMensagem = imageMessage.caption || '[Imagem do cliente]';
-      try {
-        const resMidia = await axios.post(
-          `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
-          { message: data },
-          { headers: headersEvo }
-        );
-        if (resMidia.data?.base64) {
-          const b64 = resMidia.data.base64;
-          bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
+      
+      let b64 = data.messageBase64 || imageMessage.base64;
+      if (!b64) {
+        try {
+          const resMidia = await axios.post(
+            `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
+            { message: data },
+            { headers: headersEvo }
+          );
+          b64 = resMidia.data?.base64;
+        } catch (e) {
+          console.log('Erro ao buscar imagem via API:', e.message);
         }
-      } catch (e) {
-        console.log('Erro ao descarregar imagem:', e.message);
+      }
+
+      if (b64) {
+        bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
       }
     }
 
