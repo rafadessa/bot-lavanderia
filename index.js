@@ -141,6 +141,22 @@ const ferramentasGemini = [
   }
 ];
 
+async function chamarGeminiComRetry(url, payload, tentativas = 3) {
+  for (let i = 0; i < tentativas; i++) {
+    try {
+      const res = await axios.post(url, payload);
+      return res;
+    } catch (err) {
+      const status = err.response?.status;
+      if ((status === 503 || status === 429) && i < tentativas - 1) {
+        await new Promise(r => setTimeout(r, 1500 * (i + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function processarComIA(telefone, nomeWhatsapp, inputUsuario, tipoMidia = 'text', bufferMidia = null, mimeType = null) {
   const { rows: cfgRows } = await pool.query('SELECT * FROM configuracoes WHERE id = 1');
   const cfg = cfgRows[0];
@@ -204,7 +220,7 @@ REGRAS:
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
-  let resposta = await axios.post(url, {
+  let resposta = await chamarGeminiComRetry(url, {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents,
     tools: ferramentasGemini
@@ -233,7 +249,7 @@ REGRAS:
     contents.push(candidate.content);
     contents.push({ role: 'user', parts: [{ functionResponse: { name, response: resultadoFuncao } }] });
 
-    resposta = await axios.post(url, {
+    resposta = await chamarGeminiComRetry(url, {
       system_instruction: { parts: [{ text: systemPrompt }] },
       contents,
       tools: ferramentasGemini
@@ -270,18 +286,22 @@ app.post('/webhook', async (req, res) => {
       mimeType = audioMessage.mimetype || 'audio/ogg; codecs=opus';
       textoMensagem = '[Áudio do cliente]';
 
-      try {
-        const resMidia = await axios.post(
-          `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
-          { message: data },
-          { headers: headersEvo }
-        );
-        const b64 = resMidia.data?.base64;
-        if (b64) {
-          bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
+      let b64 = data.messageBase64 || audioMessage.base64;
+      if (!b64) {
+        try {
+          const resMidia = await axios.post(
+            `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
+            { message: data },
+            { headers: headersEvo }
+          );
+          b64 = resMidia.data?.base64;
+        } catch (e) {
+          // Fallback silencioso para texto se o endpoint de mídia falhar
         }
-      } catch (e) {
-        console.log('Aviso ao buscar áudio via Evolution:', e.message);
+      }
+
+      if (b64) {
+        bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
       }
     }
 
@@ -291,18 +311,20 @@ app.post('/webhook', async (req, res) => {
       mimeType = imageMessage.mimetype || 'image/jpeg';
       textoMensagem = imageMessage.caption || '[Imagem do cliente]';
 
-      try {
-        const resMidia = await axios.post(
-          `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
-          { message: data },
-          { headers: headersEvo }
-        );
-        const b64 = resMidia.data?.base64;
-        if (b64) {
-          bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
-        }
-      } catch (e) {
-        console.log('Aviso ao buscar imagem via Evolution:', e.message);
+      let b64 = data.messageBase64 || imageMessage.base64;
+      if (!b64) {
+        try {
+          const resMidia = await axios.post(
+            `${EVOLUTION_API_URL}/chat/getBase64FromMedia/${INSTANCIA}`,
+            { message: data },
+            { headers: headersEvo }
+          );
+          b64 = resMidia.data?.base64;
+        } catch (e) {}
+      }
+
+      if (b64) {
+        bufferMidia = Buffer.from(b64.includes(',') ? b64.split(',')[1] : b64, 'base64');
       }
     }
 
