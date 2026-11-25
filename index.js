@@ -128,7 +128,7 @@ const ferramentasGemini = [
       },
       {
         name: 'chamar_atendente_humano',
-        description: 'Pausa o bot e chama um atendente humano em caso de reclamação, peça manchada, problema em máquina ou dúvida complexa.',
+        description: 'Pausa o bot e chama um atendente humano SOMENTE em caso de reclamação grave, peça manchada/danificada, problema em máquina, comprovante suspeito/agendado ou pedido explícito do cliente para falar com humano.',
         parameters: {
           type: 'OBJECT',
           properties: {
@@ -144,8 +144,7 @@ const ferramentasGemini = [
 async function chamarGeminiComRetry(url, payload, tentativas = 3) {
   for (let i = 0; i < tentativas; i++) {
     try {
-      const res = await axios.post(url, payload);
-      return res;
+      return await axios.post(url, payload);
     } catch (err) {
       const status = err.response?.status;
       if ((status === 503 || status === 429) && i < tentativas - 1) {
@@ -158,10 +157,15 @@ async function chamarGeminiComRetry(url, payload, tentativas = 3) {
 }
 
 async function obterBase64Midia(data) {
-  // 1. Pega direto do Webhook Base64 da Evolution v2
-  let b64 = data.message?.base64 || data.messageBase64;
+  // 1. Tenta pegar direto do Webhook Base64 da Evolution v2
+  let b64 =
+    data.message?.base64 ||
+    data.base64 ||
+    data.messageBase64 ||
+    data.message?.audioMessage?.base64 ||
+    data.message?.imageMessage?.base64;
 
-  // 2. Plano B: busca na rota correta da Evolution v2
+  // 2. Plano B: busca na rota oficial da Evolution v2
   if (!b64) {
     try {
       const resMidia = await axios.post(
@@ -171,7 +175,7 @@ async function obterBase64Midia(data) {
       );
       b64 = resMidia.data?.base64;
     } catch (e) {
-      console.log('Erro ao baixar mídia da Evolution:', e.response?.data || e.message);
+      console.error('Erro ao baixar mídia da Evolution:', e.response?.status, e.response?.data || e.message);
     }
   }
 
@@ -194,9 +198,12 @@ async function processarComIA(telefone, nomeWhatsapp, inputUsuario, tipoMidia = 
     [telefone]
   );
 
+  const hoje = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
   const systemPrompt = `
-Você é a atendente virtual da ${cfg.nome_lavanderia} no WhatsApp.
-Seja extremamente simpática, prestativa e objetiva (respostas curtas estilo WhatsApp).
+Você é a atendente virtual inteligente da ${cfg.nome_lavanderia} no WhatsApp.
+Seja simpática, natural, direta e objetiva (respostas curtas estilo WhatsApp).
+Data de hoje: ${hoje}.
 
 DADOS DA LOJA:
 - Endereço: ${cfg.endereco}
@@ -209,10 +216,18 @@ ${cfg.tabela_precos}
 FAQ / DÚVIDAS:
 ${textoFaq}
 
-REGRAS:
-1. Responda com base na tabela e FAQ. Se mandarem foto de roupa manchada ou com problema, peça desculpas e acione "chamar_atendente_humano".
-2. Ouça atentamente o áudio ou analise a imagem do cliente e responda diretamente ao que ele perguntou ou mostrou.
-3. Cliente no WhatsApp: ${nomeWhatsapp || 'Cliente'}.
+REGRAS DE ATENDIMENTO:
+1. ÁUDIOS: Você CONSEGUE ouvir áudios perfeitamente. Ouça o áudio do cliente e responda diretamente ao que ele falou. NUNCA chame atendente humano apenas porque o cliente enviou áudio.
+2. COMPROVANTES DE PAGAMENTO (PIX / CARTÃO / TRANSFERÊNCIA):
+   Sempre que o cliente enviar uma imagem ou documento de comprovante, faça uma análise rigorosa:
+   - Verifique o STATUS: precisa ser "Concluído", "Efetuado", "Pago" ou "Transferência realizada". Se estiver como "Agendado" ou "Em processamento", NÃO dê OK — avise educadamente que o pagamento consta como agendado e só podemos liberar após a efetivação.
+   - Verifique o VALOR exato, a DATA/HORA e o DESTINATÁRIO (confira se tem relação com a lavanderia/titular).
+   - Verifique sinais de adulteração (fontes desalinhadas, cortes estranhos, baixa qualidade que impeça ler valor ou data).
+   - Se parecer autêntico e concluído: responda dando um OK claro, confirmando o **valor exato** e a **data** identificados no comprovante (ex: "Comprovante recebido e conferido! ✅ Valor de R$ XX,XX confirmado. Obrigada!").
+   - Se estiver ilegível, cortado, agendado ou suspeito: informe educadamente o que faltou ou acione "chamar_atendente_humano" explicando o motivo.
+3. IMAGENS DE ROUPAS/MÁQUINAS: Analise a foto. Se for roupa manchada, danificada ou problema em máquina, peça desculpas e acione "chamar_atendente_humano".
+4. PEDIDOS: Se o cliente quiser agendar o Serviço da Equipe (+R$ 7), colete Nome, Peças e Turno e chame "registrar_pedido".
+5. Cliente no WhatsApp: ${nomeWhatsapp || 'Cliente'}.
 `;
 
   const contents = [];
@@ -227,18 +242,18 @@ REGRAS:
   }
 
   const userParts = [];
-  if ((tipoMidia === 'image' || tipoMidia === 'audio') && bufferMidia && bufferMidia.length > 0) {
+  if ((tipoMidia === 'image' || tipoMidia === 'audio' || tipoMidia === 'document') && bufferMidia && bufferMidia.length > 0) {
     userParts.push({
       inlineData: {
         mimeType: mimeType || (tipoMidia === 'audio' ? 'audio/ogg' : 'image/jpeg'),
         data: bufferMidia.toString('base64')
       }
     });
-    userParts.push({
-      text: tipoMidia === 'audio'
-        ? 'Ouça este áudio do cliente e responda diretamente ao que ele perguntou.'
-        : (inputUsuario || 'Analise esta imagem enviada pelo cliente e responda com simpatia.')
-    });
+    if (tipoMidia === 'audio') {
+      userParts.push({ text: 'Ouça atentamente este áudio do cliente e responda diretamente ao que ele perguntou ou disse.' });
+    } else {
+      userParts.push({ text: inputUsuario || 'Analise esta imagem/documento. Se for um comprovante de pagamento, verifique autenticidade, status, data e valor conforme suas instruções.' });
+    }
   } else {
     userParts.push({ text: inputUsuario });
   }
@@ -307,20 +322,34 @@ app.post('/webhook', async (req, res) => {
     let bufferMidia = null;
     let mimeType = null;
 
+    // 1. Áudio
     const audioMessage = data.message?.audioMessage || data.message?.pttMessage;
     if (audioMessage) {
       tipoMidia = 'audio';
-      mimeType = (audioMessage.mimetype || 'audio/ogg').split(';')[0];
+      mimeType = (audioMessage.mimetype || 'audio/ogg').split(';')[0].trim();
       textoMensagem = '[Áudio do cliente]';
       bufferMidia = await obterBase64Midia(data);
+      console.log(`Áudio recebido de ${telefone} | bytes: ${bufferMidia?.length || 0} | mime: ${mimeType}`);
     }
 
+    // 2. Imagem (fotos e prints de comprovante)
     const imageMessage = data.message?.imageMessage;
     if (imageMessage) {
       tipoMidia = 'image';
-      mimeType = (imageMessage.mimetype || 'image/jpeg').split(';')[0];
-      textoMensagem = imageMessage.caption || '[Imagem do cliente]';
+      mimeType = (imageMessage.mimetype || 'image/jpeg').split(';')[0].trim();
+      textoMensagem = imageMessage.caption || '[Imagem enviada pelo cliente]';
       bufferMidia = await obterBase64Midia(data);
+      console.log(`Imagem recebida de ${telefone} | bytes: ${bufferMidia?.length || 0} | mime: ${mimeType}`);
+    }
+
+    // 3. Documento PDF (muitos clientes mandam comprovante PIX em PDF)
+    const documentMessage = data.message?.documentMessage || data.message?.documentWithCaptionMessage?.message?.documentMessage;
+    if (documentMessage && documentMessage.mimetype === 'application/pdf') {
+      tipoMidia = 'document';
+      mimeType = 'application/pdf';
+      textoMensagem = documentMessage.caption || '[Comprovante PDF enviado pelo cliente]';
+      bufferMidia = await obterBase64Midia(data);
+      console.log(`PDF recebido de ${telefone} | bytes: ${bufferMidia?.length || 0}`);
     }
 
     if (!textoMensagem && !bufferMidia) return;
@@ -338,7 +367,10 @@ app.post('/webhook', async (req, res) => {
     const { rows: cfgRows } = await pool.query('SELECT bot_ativo_global FROM configuracoes WHERE id = 1');
     const { rows: leadRows } = await pool.query('SELECT bot_pausado FROM leads WHERE telefone = $1', [telefone]);
 
-    if (!cfgRows[0]?.bot_ativo_global || leadRows[0]?.bot_pausado) return;
+    if (!cfgRows[0]?.bot_ativo_global || leadRows[0]?.bot_pausado) {
+      console.log(`Bot pausado para ${telefone} (global: ${cfgRows[0]?.bot_ativo_global}, lead: ${leadRows[0]?.bot_pausado})`);
+      return;
+    }
 
     const respostaIA = await processarComIA(telefone, pushName, textoMensagem, tipoMidia, bufferMidia, mimeType);
 
