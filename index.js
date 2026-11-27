@@ -175,19 +175,26 @@ const ferramentasGemini = [
   }
 ];
 
-async function chamarGeminiComRetry(url, payload, tentativas = 3) {
-  for (let i = 0; i < tentativas; i++) {
-    try {
-      return await axios.post(url, payload);
-    } catch (err) {
-      const status = err.response?.status;
-      if ((status === 503 || status === 429) && i < tentativas - 1) {
-        await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
-        continue;
+async function chamarGeminiComFallback(payload) {
+  const modelos = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+
+  for (const modelo of modelos) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${GEMINI_API_KEY}`;
+    for (let tentativa = 0; tentativa < 2; tentativa++) {
+      try {
+        return await axios.post(url, payload);
+      } catch (err) {
+        const status = err.response?.status;
+        if (status === 503 || status === 429) {
+          console.log(`Modelo ${modelo} ocupado (${status}), tentando próximo...`);
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
   }
+  throw new Error('Todos os modelos Gemini estão temporariamente indisponíveis.');
 }
 
 async function obterBase64Midia(data) {
@@ -294,9 +301,7 @@ REGRAS DE ATENDIMENTO:
 
   contents.push({ role: 'user', parts: userParts });
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-
-  let resposta = await chamarGeminiComRetry(url, {
+  let resposta = await chamarGeminiComFallback({
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents,
     tools: ferramentasGemini
@@ -346,7 +351,7 @@ REGRAS DE ATENDIMENTO:
     contents.push(candidate.content);
     contents.push({ role: 'user', parts: [{ functionResponse: { name, response: resultadoFuncao } }] });
 
-    resposta = await chamarGeminiComRetry(url, {
+    resposta = await chamarGeminiComFallback({
       system_instruction: { parts: [{ text: systemPrompt }] },
       contents,
       tools: ferramentasGemini
@@ -358,7 +363,6 @@ REGRAS DE ATENDIMENTO:
     'Entendido! Como posso ajudar mais?'
   );
 }
-
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
