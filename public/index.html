@@ -123,13 +123,11 @@
 
     <main class="px-4 pt-5">
       <!-- ABA 1: PEDIDOS -->
-      <section id="aba-pedidos" class="aba animate-fade">
-        <div class="flex justify-between items-center mb-3 px-1">
-          <h2 class="font-bold text-base text-slate-800">Pedidos & Serviço +R$ 7</h2>
-          <span class="text-[11px] font-semibold text-slate-400">Tempo real</span>
-        </div>
-        <div id="lista-agendamentos" class="space-y-3"></div>
-      </section>
+      <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+  <div class="text-xs font-medium text-slate-500">Comprovantes (Total)</div>
+  <div id="resumo-faturado" class="text-xl font-bold text-emerald-600 mt-1">R$ 0,00</div>
+</div>
+
 
       <!-- ABA 2: LEADS -->
       <section id="aba-leads" class="aba hidden animate-fade">
@@ -388,7 +386,9 @@
 
     async function carregarResumo() {
       const r = await api('/api/resumo');
-      document.getElementById('stat-pedidos').innerText = r.pedidosAtivos;
+     document.getElementById('resumo-faturado').textContent = (data.totalFaturado || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+       document.getElementById('stat-pedidos').innerText = r.pedidosAtivos;
       document.getElementById('stat-leads').innerText = r.totalLeads;
       document.getElementById('stat-humano').innerText = r.aguardandoHumano;
     }
