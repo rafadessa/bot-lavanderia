@@ -64,6 +64,16 @@ async function iniciarBanco() {
       criado_em TIMESTAMP DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS pagamentos (
+      id SERIAL PRIMARY KEY,
+      telefone VARCHAR(30) NOT NULL,
+      nome VARCHAR(120),
+      valor NUMERIC(10, 2) NOT NULL,
+      servicos TEXT DEFAULT 'Aguardando cliente informar',
+      data_comprovante VARCHAR(30),
+      criado_em TIMESTAMP DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS mensagens (
       id SERIAL PRIMARY KEY,
       telefone VARCHAR(30) NOT NULL,
@@ -113,6 +123,30 @@ const ferramentasGemini = [
   {
     functionDeclarations: [
       {
+        name: 'registrar_pagamento',
+        description: 'Registra e contabiliza no sistema o valor de um comprovante de pagamento (PIX/Cartão) validado e concluído.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            valor: { type: 'NUMBER', description: 'Valor numérico do comprovante (ex: 60.00)' },
+            data_comprovante: { type: 'STRING', description: 'Data do comprovante (ex: 27/11/2026)' },
+            servicos: { type: 'STRING', description: 'Serviços referentes ao pagamento, se o cliente já tiver informado' }
+          },
+          required: ['valor']
+        }
+      },
+      {
+        name: 'atualizar_servicos_pagamento',
+        description: 'Atualiza o último pagamento registrado do cliente com a descrição dos serviços que ele informou.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            servicos: { type: 'STRING', description: 'Descrição dos serviços informados pelo cliente (ex: 2 lavagens e 1 secagem)' }
+          },
+          required: ['servicos']
+        }
+      },
+      {
         name: 'registrar_pedido',
         description: 'Registra um pedido ou serviço (ex: Serviço da Equipe +R$ 7) quando o cliente informar nome, peças e horário.',
         parameters: {
@@ -157,7 +191,6 @@ async function chamarGeminiComRetry(url, payload, tentativas = 3) {
 }
 
 async function obterBase64Midia(data) {
-  // 1. Tenta pegar direto do Webhook Base64 da Evolution v2
   let b64 =
     data.message?.base64 ||
     data.base64 ||
@@ -165,7 +198,6 @@ async function obterBase64Midia(data) {
     data.message?.audioMessage?.base64 ||
     data.message?.imageMessage?.base64;
 
-  // 2. Plano B: busca na rota oficial da Evolution v2
   if (!b64) {
     try {
       const resMidia = await axios.post(
@@ -219,12 +251,14 @@ ${textoFaq}
 REGRAS DE ATENDIMENTO:
 1. ÁUDIOS: Você CONSEGUE ouvir áudios perfeitamente. Ouça o áudio do cliente e responda diretamente ao que ele falou. NUNCA chame atendente humano apenas porque o cliente enviou áudio.
 2. COMPROVANTES DE PAGAMENTO (PIX / CARTÃO / TRANSFERÊNCIA):
-   Sempre que o cliente enviar uma imagem ou documento de comprovante, faça uma análise rigorosa:
-   - Verifique o STATUS: precisa ser "Concluído", "Efetuado", "Pago" ou "Transferência realizada". Se estiver como "Agendado" ou "Em processamento", NÃO dê OK — avise educadamente que o pagamento consta como agendado e só podemos liberar após a efetivação.
-   - Verifique o VALOR exato, a DATA/HORA e o DESTINATÁRIO (confira se tem relação com a lavanderia/titular).
-   - Verifique sinais de adulteração (fontes desalinhadas, cortes estranhos, baixa qualidade que impeça ler valor ou data).
-   - Se parecer autêntico e concluído: responda dando um OK claro, confirmando o **valor exato** e a **data** identificados no comprovante (ex: "Comprovante recebido e conferido! ✅ Valor de R$ XX,XX confirmado. Obrigada!").
-   - Se estiver ilegível, cortado, agendado ou suspeito: informe educadamente o que faltou ou acione "chamar_atendente_humano" explicando o motivo.
+   Sempre que o cliente enviar uma imagem ou documento de comprovante:
+   - Verifique o STATUS: precisa ser "Concluído", "Efetuado", "Pago" ou "Transferência realizada". Se for "Agendado" ou "Em processamento", NÃO registre e NÃO dê OK — avise educadamente que consta como agendado.
+   - Verifique o VALOR exato, a DATA/HORA e o DESTINATÁRIO.
+   - Se parecer autêntico e concluído:
+     a) CHAME obrigatoriamente a função "registrar_pagamento" passando o valor numérico exato e a data.
+     b) Responda dando o OK com o valor confirmado E PERGUNTE a quais serviços esse valor se refere (ex: "Comprovante recebido e conferido! ✅ Valor de R$ 60,00 confirmado. Para eu deixar certinho aqui no sistema, esses R$ 60,00 foram referentes a quais serviços? 😊").
+   - Quando o cliente responder dizendo quais serviços foram, CHAME a função "atualizar_servicos_pagamento" com a resposta dele e agradeça.
+   - Se o comprovante estiver ilegível, cortado, agendado ou suspeito: informe educadamente ou acione "chamar_atendente_humano".
 3. IMAGENS DE ROUPAS/MÁQUINAS: Analise a foto. Se for roupa manchada, danificada ou problema em máquina, peça desculpas e acione "chamar_atendente_humano".
 4. PEDIDOS: Se o cliente quiser agendar o Serviço da Equipe (+R$ 7), colete Nome, Peças e Turno e chame "registrar_pedido".
 5. Cliente no WhatsApp: ${nomeWhatsapp || 'Cliente'}.
@@ -252,7 +286,7 @@ REGRAS DE ATENDIMENTO:
     if (tipoMidia === 'audio') {
       userParts.push({ text: 'Ouça atentamente este áudio do cliente e responda diretamente ao que ele perguntou ou disse.' });
     } else {
-      userParts.push({ text: inputUsuario || 'Analise esta imagem/documento. Se for um comprovante de pagamento, verifique autenticidade, status, data e valor conforme suas instruções.' });
+      userParts.push({ text: inputUsuario || 'Analise esta imagem/documento. Se for comprovante de pagamento válido e concluído, chame registrar_pagamento e pergunte a quais serviços o valor se refere.' });
     }
   } else {
     userParts.push({ text: inputUsuario });
@@ -276,7 +310,28 @@ REGRAS DE ATENDIMENTO:
     const { name, args } = functionCallPart.functionCall;
     let resultadoFuncao = {};
 
-    if (name === 'registrar_pedido') {
+    if (name === 'registrar_pagamento') {
+      await pool.query(
+        `INSERT INTO pagamentos (telefone, nome, valor, servicos, data_comprovante)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          telefone,
+          nomeWhatsapp || 'Cliente',
+          Number(args.valor) || 0,
+          args.servicos || 'Aguardando cliente informar',
+          args.data_comprovante || hoje
+        ]
+      );
+      resultadoFuncao = { sucesso: true, mensagem: 'Pagamento contabilizado no sistema.' };
+    } else if (name === 'atualizar_servicos_pagamento') {
+      await pool.query(
+        `UPDATE pagamentos
+         SET servicos = $1
+         WHERE id = (SELECT id FROM pagamentos WHERE telefone = $2 ORDER BY id DESC LIMIT 1)`,
+        [args.servicos, telefone]
+      );
+      resultadoFuncao = { sucesso: true, mensagem: 'Serviços vinculados ao pagamento.' };
+    } else if (name === 'registrar_pedido') {
       await pool.query(
         `INSERT INTO agendamentos (telefone, nome, endereco, pecas, turno, status) VALUES ($1, $2, $3, $4, $5, 'Aguardando')`,
         [telefone, args.nome, args.endereco, args.pecas, args.turno]
@@ -322,34 +377,28 @@ app.post('/webhook', async (req, res) => {
     let bufferMidia = null;
     let mimeType = null;
 
-    // 1. Áudio
     const audioMessage = data.message?.audioMessage || data.message?.pttMessage;
     if (audioMessage) {
       tipoMidia = 'audio';
       mimeType = (audioMessage.mimetype || 'audio/ogg').split(';')[0].trim();
       textoMensagem = '[Áudio do cliente]';
       bufferMidia = await obterBase64Midia(data);
-      console.log(`Áudio recebido de ${telefone} | bytes: ${bufferMidia?.length || 0} | mime: ${mimeType}`);
     }
 
-    // 2. Imagem (fotos e prints de comprovante)
     const imageMessage = data.message?.imageMessage;
     if (imageMessage) {
       tipoMidia = 'image';
       mimeType = (imageMessage.mimetype || 'image/jpeg').split(';')[0].trim();
       textoMensagem = imageMessage.caption || '[Imagem enviada pelo cliente]';
       bufferMidia = await obterBase64Midia(data);
-      console.log(`Imagem recebida de ${telefone} | bytes: ${bufferMidia?.length || 0} | mime: ${mimeType}`);
     }
 
-    // 3. Documento PDF (muitos clientes mandam comprovante PIX em PDF)
     const documentMessage = data.message?.documentMessage || data.message?.documentWithCaptionMessage?.message?.documentMessage;
     if (documentMessage && documentMessage.mimetype === 'application/pdf') {
       tipoMidia = 'document';
       mimeType = 'application/pdf';
       textoMensagem = documentMessage.caption || '[Comprovante PDF enviado pelo cliente]';
       bufferMidia = await obterBase64Midia(data);
-      console.log(`PDF recebido de ${telefone} | bytes: ${bufferMidia?.length || 0}`);
     }
 
     if (!textoMensagem && !bufferMidia) return;
@@ -367,10 +416,7 @@ app.post('/webhook', async (req, res) => {
     const { rows: cfgRows } = await pool.query('SELECT bot_ativo_global FROM configuracoes WHERE id = 1');
     const { rows: leadRows } = await pool.query('SELECT bot_pausado FROM leads WHERE telefone = $1', [telefone]);
 
-    if (!cfgRows[0]?.bot_ativo_global || leadRows[0]?.bot_pausado) {
-      console.log(`Bot pausado para ${telefone} (global: ${cfgRows[0]?.bot_ativo_global}, lead: ${leadRows[0]?.bot_pausado})`);
-      return;
-    }
+    if (!cfgRows[0]?.bot_ativo_global || leadRows[0]?.bot_pausado) return;
 
     const respostaIA = await processarComIA(telefone, pushName, textoMensagem, tipoMidia, bufferMidia, mimeType);
 
@@ -391,7 +437,18 @@ app.get('/api/resumo', autenticar, async (req, res) => {
   const leads = await pool.query('SELECT COUNT(*) FROM leads');
   const pausados = await pool.query('SELECT COUNT(*) FROM leads WHERE bot_pausado = true');
   const pedidosAtivos = await pool.query("SELECT COUNT(*) FROM agendamentos WHERE status NOT IN ('Entregue', 'Cancelado')");
-  res.json({ totalLeads: Number(leads.rows[0].count), aguardandoHumano: Number(pausados.rows[0].count), pedidosAtivos: Number(pedidosAtivos.rows[0].count) });
+  const faturado = await pool.query('SELECT COALESCE(SUM(valor), 0) AS total FROM pagamentos');
+  res.json({
+    totalLeads: Number(leads.rows[0].count),
+    aguardandoHumano: Number(pausados.rows[0].count),
+    pedidosAtivos: Number(pedidosAtivos.rows[0].count),
+    totalFaturado: Number(faturado.rows[0].total)
+  });
+});
+
+app.get('/api/pagamentos', autenticar, async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM pagamentos ORDER BY criado_em DESC LIMIT 50');
+  res.json(rows);
 });
 
 app.get('/api/agendamentos', autenticar, async (req, res) => {
